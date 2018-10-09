@@ -17,5 +17,7 @@ typedef struct {
 CgiStatus cgiGetFirmwareNext(HttpdConnData *connData);
 CgiStatus cgiUploadFirmware(HttpdConnData *connData);
 CgiStatus cgiRebootFirmware(HttpdConnData *connData);
+CgiStatus cgiSetBoot(HttpdConnData *connData);
+CgiStatus cgiGetFlashInfo(HttpdConnData *connData);
 
 #endif
