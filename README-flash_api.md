@@ -1,5 +1,14 @@
 # Libesphttpd Flash-API
 
+Functions to flash firmware Over-The-Air.  These are only useful if you have enabled OTA support.
+
+The simplest way to use the partition table is to make menuconfig and choose the simple predefined partition table:
+
+    “Factory app, two OTA definitions”
+
+## GUI
+See the example js/html code for the GUI here: https://github.com/phatpaul/esphttpd-freertos/blob/master/html/flash/index.html
+
 ## Functions defined in cgiflash.h
 
 * __cgiGetFirmwareNext()__
@@ -21,8 +30,6 @@ CGI function to erase flash memory.  (only supports erasing data partitions)
 CGI function returns a JSON object describing the partition table.  It can also verify the firmware images, but not by default because that process takes several seconds.
 
 ## HTTP REST API
-
-See the example js/html code for the GUI here: https://github.com/phatpaul/esphttpd-freertos/blob/master/html/flash/index.html
 
 The flash API is specified in RAML.  (see https://raml.org)
 
