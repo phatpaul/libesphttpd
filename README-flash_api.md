@@ -1,23 +1,59 @@
 # Libesphttpd Flash-API
 
+## Functions defined in cgiflash.h
+
+* __cgiGetFirmwareNext()__
+Legacy function for ESP8266 (not needed for ESP32)
+
+* __cgiUploadFirmware()__
+CGI function writes HTTP POST data to flash.
+
+* __cgiRebootFirmware()__
+CGI function reboots the ESP firmware after a short time-delay.
+
+* __cgiSetBoot()__
+CGI function to change the selected boot partition.
+
+* __cgiEraseFlash()__
+CGI function to erase flash memory.  (only supports erasing data partitions)
+
+* __cgiGetFlashInfo()__
+CGI function returns a JSON object describing the partition table.  It can also verify the firmware images, but not by default because that process takes several seconds.
+
+## HTTP REST API
+
+See the example js/html code for the GUI here: https://github.com/phatpaul/esphttpd-freertos/blob/master/html/flash/index.html
+
 The flash API is specified in RAML.  (see https://raml.org)
+
 ```yaml
 #%RAML 1.0
 title: flash
 version: v1
 baseUri: http://me.local/flash
 
-
 /flashinfo.json:
-    description: info about the partition table
+    description: Flash info
     get:
         description: Returns a JSON of info about the partition table
         queryParameters:
-            type:
-                displayName: Partition Type
+            ptype:
+                displayName: ptype
                 type: string
                 description: String name of partition type (app, data).  If not specified, return both app and data partitions.
                 example: app
+                required: false
+            verify:
+                displayName: verify
+                type: number
+                description: 1: verify the app partitions.  0 (default): don't verify.  Note: verification takes >2s per partition!
+                example: 1
+                required: false
+            partition:
+                displayName: partition
+                type: string
+                description: String name of partition (i.e. factory, ota_0, ota_1).  If not specified, return all.
+                example: ota_0
                 required: false
         responses:
             200:
@@ -79,7 +115,7 @@ baseUri: http://me.local/flash
         description: Set the boot flag.  example GET /flash/setboot?partition=ota_1
         queryParameters:
             partition:
-                displayName: Partition
+                displayName: partition
                 type: string
                 description: String name of partition (i.e. factory, ota_0, ota_1).  If not specified, just return the current setting.
                 example: ota_0
@@ -101,7 +137,7 @@ baseUri: http://me.local/flash
 /reboot:
     description: Reboot the processor
     get:
-        description: Reboot the processor.  example GET /flash/reboot
+        description: Reboot the processor.  Waits 0.5s before rebooting to allow the JSON response to be sent.
         responses:
             200:
                 body:
@@ -116,14 +152,13 @@ baseUri: http://me.local/flash
                           "message": "Rebooting..."
                         }
                         
-
 /upload:
-    description: Upload APP firmware to flash memory
+    description: Upload APP
     post:
         description: Upload APP firmware to flash memory.
         queryParameters:
             partition:
-                displayName: Partition
+                displayName: partition
                 type: string
                 description: String name of partition (i.e. factory, ota_0, ota_1).  If not specified, automatically choose the next available OTA slot.
                 example: ota_0
@@ -140,5 +175,30 @@ baseUri: http://me.local/flash
                           {
                               "success": true
                               "message": "Flash Success."
+                          }
+                          
+/erase:
+    description: Erase data
+    get:
+        description: Erase data in a data (not app) partition.  Recommend reboot immediately after to force a reformat of the data.
+        queryParameters:
+            partition:
+                displayName: partition
+                type: string
+                description: String name of data partition (i.e. internalfs, nvs, ota_data).  If not specified, nothing is erased.
+                example: internalfs
+                required: true
+        responses:
+            200:
+                body:
+                    application/json:
+                      type: object
+                      properties:
+                        success: boolean
+                        message: string
+                      example: |
+                          {
+                              "success": true
+                              "erased": "internalfs"
                           }
 ```
