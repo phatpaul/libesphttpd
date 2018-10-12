@@ -197,6 +197,7 @@ CgiStatus ICACHE_FLASH_ATTR cgiUploadFirmware(HttpdConnData *connData) {
 		// check arg partition name
 		char arg_partition_buf[16] = "";
 		int len;
+//// HTTP GET queryParameter "partition" : string
 	    len=httpdFindArg(connData->getArgs, "partition", arg_partition_buf, sizeof(arg_partition_buf));
 	    if (len > 0)
 	    {
@@ -543,18 +544,18 @@ CgiStatus ICACHE_FLASH_ATTR cgiSetBoot(HttpdConnData *connData) {
 	// check arg partition name
 	char arg_partition_buf[16] = "";
 	int len;
+//// HTTP GET queryParameter "partition" : string
     len=httpdFindArg(connData->getArgs, "partition", arg_partition_buf, sizeof(arg_partition_buf));
     if (len > 0)
     {
     	ESP_LOGD(TAG, "Set Boot Command recvd. for partition with name: %s", arg_partition_buf);
-    	// TODO: sanity-check that the 'next' partition actually contains something that looks like valid firmware
     	wanted_bootpart = esp_partition_find_first(ESP_PARTITION_TYPE_APP,ESP_PARTITION_SUBTYPE_ANY,arg_partition_buf);
     	esp_err_t err = esp_ota_set_boot_partition(wanted_bootpart);
     	if (err != ESP_OK) {
     		ESP_LOGE(TAG, "esp_ota_set_boot_partition failed! err=0x%x", err);
     	}
     }
-    actual_bootpart = esp_ota_get_boot_partition();
+    actual_bootpart = esp_ota_get_boot_partition(); // if above failed or arg not specified, return what is currently set for boot.
 
 	cJSON_AddStringToObject(jsroot, "boot", actual_bootpart->label);
 	cJSON_AddBoolToObject(jsroot, "success", (wanted_bootpart == NULL || wanted_bootpart == actual_bootpart));
@@ -576,6 +577,7 @@ CgiStatus ICACHE_FLASH_ATTR cgiEraseFlash(HttpdConnData *connData) {
 	// check arg partition name
 	char arg_partition_buf[16] = "";
 	int len;
+//// HTTP GET queryParameter "partition" : string
     len=httpdFindArg(connData->getArgs, "partition", arg_partition_buf, sizeof(arg_partition_buf));
     if (len > 0)
     {
@@ -588,6 +590,7 @@ CgiStatus ICACHE_FLASH_ATTR cgiEraseFlash(HttpdConnData *connData) {
     	else
     	{
     		ESP_LOGW(TAG, "Data partition: %s is erased now!  Must reboot to reformat it!", wanted_partition->label);
+    		cJSON_AddStringToObject(jsroot, "erased", wanted_partition->label);
     	}
     }
 
@@ -604,7 +607,7 @@ CgiStatus ICACHE_FLASH_ATTR cgiEraseFlash(HttpdConnData *connData) {
 static int check_partition_valid_app(const esp_partition_t *partition)
 {
     if (partition == NULL) {
-        return ESP_ERR_INVALID_ARG;
+        return 0;
     }
 
     esp_image_metadata_t data;
@@ -617,6 +620,7 @@ static int check_partition_valid_app(const esp_partition_t *partition)
     }
     return 1; // App in partition is valid
 }
+
 #define PARTITION_IS_FACTORY(partition)  ((partition->type == ESP_PARTITION_TYPE_APP) && (partition->subtype == ESP_PARTITION_SUBTYPE_APP_FACTORY))
 #define PARTITION_IS_OTA(partition)  ((partition->type == ESP_PARTITION_TYPE_APP) && (partition->subtype >= ESP_PARTITION_SUBTYPE_APP_OTA_MIN) && (partition->subtype <= ESP_PARTITION_SUBTYPE_APP_OTA_MAX))
 // Cgi to query info about partitions and firmware
@@ -627,15 +631,15 @@ CgiStatus ICACHE_FLASH_ATTR cgiGetFlashInfo(HttpdConnData *connData) {
 	}
 	const esp_partition_t *running_partition = NULL;
 	const esp_partition_t *boot_partition = NULL;
-	const esp_partition_subtype_t subtypes[] = {ESP_PARTITION_SUBTYPE_APP_FACTORY, ESP_PARTITION_SUBTYPE_APP_OTA_0, ESP_PARTITION_SUBTYPE_APP_OTA_1};
 
 	cJSON *jsroot = cJSON_CreateObject();
 	// check arg
 	char arg_1_buf[16] = "";
 	int len;
+//// HTTP GET queryParameter "ptype" : string ("app", "data")
 	bool get_app = true;  // get both app and data partitions by default
 	bool get_data = true;
-    len=httpdFindArg(connData->getArgs, "type", arg_1_buf, sizeof(arg_1_buf));
+    len=httpdFindArg(connData->getArgs, "ptype", arg_1_buf, sizeof(arg_1_buf));
     if (len > 0)
     {
     	if (strcmp(arg_1_buf, "app") == 0)
@@ -647,13 +651,33 @@ CgiStatus ICACHE_FLASH_ATTR cgiGetFlashInfo(HttpdConnData *connData) {
     		get_app = false;  // don't get app partitinos if client specified ?type=data
     	}
     }
+//// HTTP GET queryParameter "verify"	: number 0,1
+	bool verify_app = false;  // default don't verfiy apps, because it takes a long time.
+    len=httpdFindArg(connData->getArgs, "verify", arg_1_buf, sizeof(arg_1_buf));
+    if (len > 0) {
+    	char ch;  // dummy to test for malformed input
+    	int val;
+    	int n = sscanf(arg_1_buf, "%d%c", &val, &ch);
+		if (n == 1) {
+			/* sscanf found a number to convert */
+			verify_app = (val == 1)?(true):(false);
+		}
+    }
+//// HTTP GET queryParameter "partition" : string
+	bool specify_partname = false;
+	len=httpdFindArg(connData->getArgs, "partition", arg_1_buf, sizeof(arg_1_buf));
+	if (len > 0)
+	{
+		specify_partname = true;
+	}
 
     if (get_app)
     {
-    	boot_partition = esp_ota_get_boot_partition();
     	running_partition = esp_ota_get_running_partition();
+    	boot_partition = esp_ota_get_boot_partition();
+    	if (boot_partition == NULL) {boot_partition = running_partition;} // If no ota_data partition, then esp_ota_get_boot_partition() might return NULL.
     	cJSON *jsapps = cJSON_AddArrayToObject(jsroot, "app");
-    	esp_partition_iterator_t it = esp_partition_find(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, NULL);
+    	esp_partition_iterator_t it = esp_partition_find(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, (specify_partname)?(arg_1_buf):(NULL));
         while (it != NULL) {
             const esp_partition_t *it_partition = esp_partition_get(it);
     		if (it_partition != NULL)
@@ -664,7 +688,10 @@ CgiStatus ICACHE_FLASH_ATTR cgiGetFlashInfo(HttpdConnData *connData) {
     			cJSON_AddNumberToObject(partj, "size", it_partition->size);
     			cJSON_AddStringToObject(partj, "version", "");  // todo
     			cJSON_AddBoolToObject(partj, "ota", PARTITION_IS_OTA(it_partition));
-    			cJSON_AddBoolToObject(partj, "valid", PARTITION_IS_FACTORY(it_partition)||(PARTITION_IS_OTA(it_partition) && check_partition_valid_app(it_partition)));  //lazy, only check OTA partitions
+    			if (verify_app)
+    			{
+    				cJSON_AddBoolToObject(partj, "valid", check_partition_valid_app(it_partition));
+    			}
     			cJSON_AddBoolToObject(partj, "running", (it_partition==running_partition));
     			cJSON_AddBoolToObject(partj, "bootset", (it_partition==boot_partition));
     			cJSON_AddItemToArray(jsapps, partj);
@@ -677,7 +704,7 @@ CgiStatus ICACHE_FLASH_ATTR cgiGetFlashInfo(HttpdConnData *connData) {
 	if (get_data)
 	{
 		cJSON *jsdatas = cJSON_AddArrayToObject(jsroot, "data");
-		esp_partition_iterator_t it = esp_partition_find(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, NULL);
+		esp_partition_iterator_t it = esp_partition_find(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, (specify_partname)?(arg_1_buf):(NULL));
 	    while (it != NULL) {
 	        const esp_partition_t *it_partition = esp_partition_get(it);
 			if (it_partition != NULL)
@@ -693,7 +720,7 @@ CgiStatus ICACHE_FLASH_ATTR cgiGetFlashInfo(HttpdConnData *connData) {
 	    }
 		esp_partition_iterator_release(it);
 	}
-
+	cJSON_AddBoolToObject(jsroot, "success", true);
 	cgiJsonResponseCommon(connData, jsroot); // Send the json response!
 	return HTTPD_CGI_DONE;
 }
