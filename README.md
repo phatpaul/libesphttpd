@@ -105,10 +105,11 @@ the ESP8266/ESP32.
 
 * __cgiWiFi* functions__ (arg: various)
 These are used to change WiFi mode, scan for access points, associate to an access point etcetera. See
-the example projects for an implementation that uses these function calls.
+the example projects for an implementation that uses this function call.  [FreeRTOS Example](https://github.com/chmorgan/esphttpd-freertos)
 
 * __cgiWebsocket__ (arg: connect function)
-This CGI is used to set up a websocket. Websockets are described later in this document.
+This CGI is used to set up a websocket. Websockets are described later in this document.  See
+the example projects for an implementation that uses this function call.  [FreeRTOS Example](https://github.com/chmorgan/esphttpd-freertos)
 
 * __cgiEspFsHook__ (arg: none)
 Serves files from the espfs filesystem. The espFsInit function should be called first, with as argument
@@ -119,6 +120,37 @@ configured to do either.
 * __cgiEspFsTemplate__ (arg: template function)
 The espfs code comes with a small but efficient template routine, which can fill a template file stored on
 the espfs filesystem with user-defined data.
+
+* __cgiEspVfsGet__ (arg: base filesystem path)
+This is a catch-all cgi function. It takes the url passed to it, looks up the corresponding path in the filesystem and if it exists, sends the file. This simulates what a normal webserver would do with static files.  If the file is not found, (or if http method is not GET) this cgi function returns NOT_FOUND, and then other cgi functions specified later in the routing table can try.  See the example projects for an implementation that uses this function call.  [FreeRTOS Example](https://github.com/chmorgan/esphttpd-freertos)
+
+  The cgiArg value is the base directory path, if specified.
+  Usage:
+    * ROUTE_CGI("*", cgiEspVfsGet)
+    * ROUTE_CGI_ARG("*", cgiEspVfsGet, "/base/directory/")
+    * ROUTE_CGI_ARG("*", cgiEspVfsGet, ".") to use the current working directory
+    
+* __cgiEspVfsUpload__ (arg: base filesystem path)
+This is a POST and PUT handler for uploading files to the VFS filesystem.  See the example projects for an implementation that uses this function call.  [FreeRTOS Example](https://github.com/chmorgan/esphttpd-freertos)
+
+  Specify base directory (with trailing slash) or single file as 1st cgiArg.
+  If http method is not PUT or POST, this cgi function returns NOT_FOUND, and then other cgi functions specified later in the routing table can try.
+  
+  Filename can be specified 3 ways, in order of priority lowest to highest:
+  1. ___URL Path___  i.e. PUT http://1.2.3.4/path/newfile.txt
+  2. ___Inside multipart/form-data___ (todo not supported yet)
+  3. ___URL Parameter___  i.e. POST http://1.2.3.4/upload.cgi?filename=path%2Fnewfile.txt
+  
+  Usage:
+    * ROUTE_CGI_ARG("*", cgiEspVfsUpload, "/base/directory/")
+      - Allows creating/replacing files anywhere under "/base/directory/".  Don't forget to specify trailing slash in cgiArg!
+      - example: POST or PUT http://1.2.3.4/anydir/anyname.txt
+    * ROUTE_CGI_ARG("/filesystem/upload.cgi", cgiEspVfsUpload, "/base/directory/")
+      - Allows creating/replacing files anywhere under "/base/directory/".  Don't forget to specify trailing slash in cgiArg!
+      - example: POST or PUT http://1.2.3.4/filesystem/upload.cgi?filename=newdir%2Fnewfile.txt
+    * ROUTE_CGI_ARG("/writeable_file.txt", cgiEspVfsUpload, "/base/directory/writeable_file.txt")
+      - Allows only replacing content of one file at "/base/directory/writeable_file.txt".
+      - example: POST or PUT http://1.2.3.4/writeable_file.txt
 
 ## How to configure and use SSL
 
