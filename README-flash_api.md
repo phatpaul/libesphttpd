@@ -7,7 +7,7 @@ The simplest way to use the partition table is to make menuconfig and choose the
     “Factory app, two OTA definitions”
 
 ## GUI
-See the example js/html code for the GUI here: https://github.com/phatpaul/esphttpd-freertos/blob/master/html/flash/index.html
+See the example js/html code for the GUI here: https://github.com/chmorgan/esphttpd-freertos/blob/master/html/flash/index.html
 
 ## Functions defined in cgiflash.h
 
