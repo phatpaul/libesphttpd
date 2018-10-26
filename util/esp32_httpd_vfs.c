@@ -18,7 +18,7 @@ Connector to let httpd use the vfs filesystem to serve the files in it.
 #include "cJSON.h"
 
 #define FILE_CHUNK_LEN    (1024)
-#define MAX_FILENAME_LENGTH (1024)
+#define MAX_FILENAME_LENGTH (127)
 
 // If the client does not advertise that he accepts GZIP send following warning message (telnet users for e.g.)
 static const char *gzipNonSupportedMessage = "HTTP/1.0 501 Not implemented\r\nServer: esp8266-httpd/"HTTPDVER"\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 52\r\n\r\nYour browser does not accept gzip-compressed data.\r\n";
@@ -68,14 +68,32 @@ CgiStatus ICACHE_FLASH_ATTR cgiEspVfsGet(HttpdConnData *connData) {
 			return HTTPD_CGI_NOTFOUND;  //	return and allow another cgi function to handle it
 		}
 		filename[0] = '\0';
-
-		if (connData->cgiArg != NULL) {
-			strncpy(filename, connData->cgiArg, MAX_FILENAME_LENGTH);
+		// cgiArg specifies where this function is allowed to read from.  It must be specified and can't be empty.
+		const char *basePath = connData->cgiArg;
+		if ((basePath == NULL) || (*basePath == 0)) {
+			return HTTPD_CGI_NOTFOUND;
 		}
-		strncat(filename, connData->url, MAX_FILENAME_LENGTH - strlen(filename));
+		int n = strlcpy(filename, basePath, MAX_FILENAME_LENGTH);
+		if (n >= MAX_FILENAME_LENGTH) return HTTPD_CGI_NOTFOUND;
+
+		// Is cgiArg a single file or a directory (with trailing slash)?
+		if (filename[n - 1] == '\\' || filename[n - 1] == '/') // check last char in cgiArg string for a slash
+		{
+			// Last char of cgiArg is a slash, assume it is a directory.
+			filename[--n] = 0; // remove the trailing slash
+		}
+	    //Filename to get is cgiArg + url.
+	    if(connData->url != NULL){
+			n = strlcpy(filename + n, connData->url, MAX_FILENAME_LENGTH - n);
+		}
+
 		ESP_LOGD(__func__, "GET: %s", filename);
 		
-		if(filename[strlen(filename)-1]=='/') filename[strlen(filename)-1]='\0';
+		if (filename[n - 1] == '\\' || filename[n - 1] == '/') // check last char in cgiArg string for a slash
+		{
+			// Last char of cgiArg is a slash, assume it is a directory.
+			filename[--n] = 0; // remove the trailing slash
+		}
 		if(stat(filename, &filestat) == 0) {
 			if((isIndex = S_ISDIR(filestat.st_mode))) {
 				strncat(filename, "/index.html", MAX_FILENAME_LENGTH - strlen(filename));
@@ -262,13 +280,15 @@ static esp_err_t createMissingDirectories(char *fullpath) {
 					int e = mkdir(string, S_IRWXU);
 					if (e != 0)
 					{
-						ESP_LOGE(__func__, "mkdir failed; errno=%d\n",errno);
+						// if command not supported, it probably means you are using SPIFFS without directory support, that's OK, proceed.
+						if (errno == ENOTSUP) break; /* Command not supported? */
+						ESP_LOGE(__func__, "mkdir failed; errno=%d",errno);
 						err = ESP_FAIL;
 						break;
 					}
 					else
 					{
-						ESP_LOGI(__func__, "created the directory %s\n",string);
+						ESP_LOGI(__func__, "created the directory %s",string);
 					}
 				}
 		   }
@@ -339,13 +359,13 @@ CgiStatus   cgiEspVfsUpload(HttpdConnData *connData) {
 		if (n >= MAX_FILENAME_LENGTH) goto error_first;
 
 		// Is cgiArg a single file or a directory (with trailing slash)?
-		if (basePath[n - 1] == '\\' || basePath[n - 1] == '/') // check last char in cgiArg string for a slash
+		if ((state->filename)[n - 1] == '\\' || (state->filename)[n - 1] == '/') // check last char in cgiArg string for a slash
 		{
 			// Last char of cgiArg is a slash, assume it is a directory.
+			(state->filename)[--n] = 0; // remove the trailing slash
 
 			// get queryParameter "filename" : string
-			char* filenamebuf = state->filename + n;
-		    int arglen = httpdFindArg(connData->getArgs, "filename", filenamebuf, MAX_FILENAME_LENGTH - n);
+		    int arglen = httpdFindArg(connData->getArgs, "filename", state->filename + n, MAX_FILENAME_LENGTH - n);
 		    // 3. (highest priority) Filename to write to is cgiArg + "filename" as specified by url parameter
 		    if (arglen > 0)
 		    {
