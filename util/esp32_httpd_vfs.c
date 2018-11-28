@@ -12,6 +12,7 @@ Connector to let httpd use the vfs filesystem to serve the files in it.
 #include <sys/errno.h>
 #include "esp_err.h"
 #include "esp_log.h"
+#include "libesphttpd/esp32_httpd_vfs.h"
 #include "libesphttpd/esp.h"
 #include "libesphttpd/httpd.h"
 #include "httpd-platform.h"
@@ -132,11 +133,18 @@ CgiStatus ICACHE_FLASH_ATTR cgiEspVfsGet(HttpdConnData *connData) {
 
 		connData->cgiData=file;
 		httpdStartResponse(connData, 200);
-		httpdHeader(connData, "Content-Type", isIndex?httpdGetMimetype("index.html"):httpdGetMimetype(connData->url));
+
+		// cgiArg2 specifies a function pointer to generate custom headers.
+		if (connData->cgiArg2 != NULL) {
+			cgiEspVfsGetOptions *options = (cgiEspVfsGetOptions *)(connData->cgiArg2);
+			(options->customHeadersFnPtr)(connData);
+		} else {
+			httpdHeader(connData, "Cache-Control", "max-age=3600, must-revalidate");
+			httpdHeader(connData, "Content-Type", isIndex?httpdGetMimetype("index.html"):httpdGetMimetype(connData->url));
+		}
 		if (isGzip) {
 			httpdHeader(connData, "Content-Encoding", "gzip");
 		}
-		httpdHeader(connData, "Cache-Control", "max-age=3600, must-revalidate");
 		httpdEndHeaders(connData);
 		return HTTPD_CGI_MORE;
 	}

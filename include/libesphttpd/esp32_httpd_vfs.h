@@ -3,6 +3,10 @@
 
 #include "httpd.h"
 
+typedef struct {
+	void (*customHeadersFnPtr)(HttpdConnData *connData);
+} cgiEspVfsGetOptions;
+
 //This is a catch-all cgi function. It takes the url passed to it, looks up the corresponding
 //path in the filesystem and if it exists, passes the file through. This simulates what a normal
 //webserver would do with static files.
