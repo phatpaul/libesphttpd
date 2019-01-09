@@ -369,7 +369,7 @@ static void handle_scan_timer(TimerHandle_t timer)
 }
 
 /* Function to trigger an AP scan. */
-static void wifi_start_scan(void)
+static esp_err_t wifi_start_scan(void)
 {
     wifi_scan_config_t scan_cfg;
     wifi_mode_t mode;
@@ -379,12 +379,12 @@ static void wifi_start_scan(void)
     \* is in a transitional state.                                      */
     if(xSemaphoreTake(cfg_state.lock, CFG_DELAY) != pdTRUE){
         ESP_LOGW(TAG, "[%s] Unable to acquire config lock.", __FUNCTION__);
-        return;
+        return ESP_FAIL;
     }
 
     if(cfg_state.state > cfg_state_idle){
-        ESP_LOGI(TAG, "[%s] WiFi connecting, not starting scan.",
-                 __FUNCTION__);
+        ESP_LOGI(TAG, "[%s] WiFi connecting, not starting scan.", __FUNCTION__);
+        result = ESP_FAIL;
         goto err_out;
     }
 
@@ -397,6 +397,7 @@ static void wifi_start_scan(void)
 
     if(mode != WIFI_MODE_APSTA && mode != WIFI_MODE_STA){
         ESP_LOGE(TAG, "[%s] Invalid WiFi mode for scanning.", __FUNCTION__);
+        result = ESP_FAIL;
         goto err_out;
     }
 
@@ -420,12 +421,13 @@ static void wifi_start_scan(void)
             atomic_store(&scan_in_progress, false);
         }
     } else {
-        ESP_LOGI(TAG, "[%s] Scan aleady running.", __FUNCTION__);
+        ESP_LOGI(TAG, "[%s] Scan already running.", __FUNCTION__);
+        result = ESP_OK;
     }
 
 err_out:
     xSemaphoreGive(cfg_state.lock);
-    return;
+    return result;
 }
 
 /* This CGI is called from the bit of AJAX-code in wifi.tpl. It will       *\
@@ -472,7 +474,12 @@ CgiStatus cgiWiFiScan(HttpdConnData *connData)
                 put_scan_data(data);
             }
         } else {
-            wifi_start_scan();
+            if(wifi_start_scan() != ESP_OK){
+                /* Start_scan failed. Tell the user there is an error and don't just keep trying.  */
+                len=sprintf(buff, "{\n \"result\": { \n\"inProgress\": \"ERROR\"\n }\n}\n");
+                httpdSend(connData, buff, len);
+                goto err_out;
+            }
         }
     }
 
