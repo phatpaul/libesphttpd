@@ -5,21 +5,45 @@
 /*
 Connector to let httpd use the vfs filesystem to serve the files in it.
 */
-#include <unistd.h>
 #include <stdio.h>
+#include <string.h>
+#include <sys/unistd.h>
 #include <sys/stat.h>
+#include <sys/errno.h>
+#include "esp_err.h"
 #include "esp_log.h"
+#include "libesphttpd/esp32_httpd_vfs.h"
 #include "libesphttpd/esp.h"
 #include "libesphttpd/httpd.h"
+#include "httpd-platform.h"
+#include "cJSON.h"
 
-#define FILE_CHUNK_LEN    1024
+#define FILE_CHUNK_LEN    (1024)
+#define MAX_FILENAME_LENGTH (127)
 
 // If the client does not advertise that he accepts GZIP send following warning message (telnet users for e.g.)
 static const char *gzipNonSupportedMessage = "HTTP/1.0 501 Not implemented\r\nServer: esp8266-httpd/"HTTPDVER"\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 52\r\n\r\nYour browser does not accept gzip-compressed data.\r\n";
 
-static const int MAX_FILENAME_LENGTH = 1024;
+static void cgiJsonResponseCommon(HttpdConnData *connData, cJSON *jsroot){
+	char *json_string = NULL;
 
-CgiStatus ICACHE_FLASH_ATTR cgiEspVfsHook(HttpdConnData *connData) {
+	//// Generate the header
+	//We want the header to start with HTTP code 200, which means the document is found.
+	httpdStartResponse(connData, 200);
+	httpdHeader(connData, "Cache-Control", "no-store, must-revalidate, no-cache, max-age=0");
+	httpdHeader(connData, "Expires", "Mon, 01 Jan 1990 00:00:00 GMT");  //  This one might be redundant, since modern browsers look for "Cache-Control".
+	httpdHeader(connData, "Content-Type", "application/json; charset=utf-8"); //We are going to send some JSON.
+	httpdEndHeaders(connData);
+	json_string = cJSON_Print(jsroot);
+    if (json_string)
+    {
+    	httpdSend(connData, json_string, -1);
+        cJSON_free(json_string);
+    }
+    cJSON_Delete(jsroot);
+}
+
+CgiStatus ICACHE_FLASH_ATTR cgiEspVfsGet(HttpdConnData *connData) {
 	FILE *file=connData->cgiData;
 	int len;
 	char buff[FILE_CHUNK_LEN];
@@ -33,21 +57,44 @@ CgiStatus ICACHE_FLASH_ATTR cgiEspVfsHook(HttpdConnData *connData) {
 		//Connection aborted. Clean up.
 		if(file != NULL){
 			fclose(file);
+			ESP_LOGD(__func__, "fclose: %s, r", filename);
 		}
+		ESP_LOGE(__func__, "Connection aborted!");
 		return HTTPD_CGI_DONE;
 	}
 
 	//First call to this cgi.
 	if (file==NULL) {
-		filename[0] = '\0';
-
-		if (connData->cgiArg != NULL) {
-			strncpy(filename, connData->cgiArg, MAX_FILENAME_LENGTH);
+		if (connData->requestType!=HTTPD_METHOD_GET) {
+			return HTTPD_CGI_NOTFOUND;  //	return and allow another cgi function to handle it
 		}
-		strncat(filename, connData->url, MAX_FILENAME_LENGTH - strlen(filename));
-		ESP_LOGI(__func__, "GET: %s", filename);
+		filename[0] = '\0';
+		// cgiArg specifies where this function is allowed to read from.  It must be specified and can't be empty.
+		const char *basePath = connData->cgiArg;
+		if ((basePath == NULL) || (*basePath == 0)) {
+			return HTTPD_CGI_NOTFOUND;
+		}
+		int n = strlcpy(filename, basePath, MAX_FILENAME_LENGTH);
+		if (n >= MAX_FILENAME_LENGTH) return HTTPD_CGI_NOTFOUND;
+
+		// Is cgiArg a single file or a directory (with trailing slash)?
+		if (filename[n - 1] == '\\' || filename[n - 1] == '/') // check last char in cgiArg string for a slash
+		{
+			// Last char of cgiArg is a slash, assume it is a directory.
+			filename[--n] = 0; // remove the trailing slash
+		}
+	    //Filename to get is cgiArg + url.
+	    if(connData->url != NULL){
+			n = strlcpy(filename + n, connData->url, MAX_FILENAME_LENGTH - n);
+		}
+
+		ESP_LOGD(__func__, "GET: %s", filename);
 		
-		if(filename[strlen(filename)-1]=='/') filename[strlen(filename)-1]='\0';
+		if (filename[n - 1] == '\\' || filename[n - 1] == '/') // check last char in cgiArg string for a slash
+		{
+			// Last char of cgiArg is a slash, assume it is a directory.
+			filename[--n] = 0; // remove the trailing slash
+		}
 		if(stat(filename, &filestat) == 0) {
 			if((isIndex = S_ISDIR(filestat.st_mode))) {
 				strncat(filename, "/index.html", MAX_FILENAME_LENGTH - strlen(filename));
@@ -55,14 +102,16 @@ CgiStatus ICACHE_FLASH_ATTR cgiEspVfsHook(HttpdConnData *connData) {
 		}
 
 		file = fopen(filename, "r");
+		if (file != NULL) ESP_LOGD(__func__, "fopen: %s, r", filename);
 		isGzip = 0;
 		
 		if (file==NULL) {
 			// Check if requested file is available GZIP compressed ie. with file extension .gz
 		
 			strncat(filename, ".gz", MAX_FILENAME_LENGTH - strlen(filename));
-			ESP_LOGI(__func__, "GET: GZIPped file - %s", filename);
+			ESP_LOGD(__func__, "GET: GZIPped file - %s", filename);
 			file = fopen(filename, "r");
+			if (file != NULL) ESP_LOGD(__func__, "fopen: %s, r", filename);
 			isGzip = 1;
 			
 			if (file==NULL) {
@@ -76,17 +125,26 @@ CgiStatus ICACHE_FLASH_ATTR cgiEspVfsHook(HttpdConnData *connData) {
 				//No Accept-Encoding: gzip header present
 				httpdSend(connData, gzipNonSupportedMessage, -1);
 				fclose(file);
+				ESP_LOGD(__func__, "fclose: %s, r", filename);
+				ESP_LOGE(__func__, "client does not accept gzip!");
 				return HTTPD_CGI_DONE;
 			}
 		}
 
 		connData->cgiData=file;
 		httpdStartResponse(connData, 200);
-		httpdHeader(connData, "Content-Type", isIndex?httpdGetMimetype("index.html"):httpdGetMimetype(connData->url));
+
+		// cgiArg2 specifies a function pointer to generate custom headers.
+		if (connData->cgiArg2 != NULL) {
+			cgiEspVfsGetOptions *options = (cgiEspVfsGetOptions *)(connData->cgiArg2);
+			(options->customHeadersFnPtr)(connData);
+		} else {
+			httpdHeader(connData, "Cache-Control", "max-age=3600, must-revalidate");
+			httpdHeader(connData, "Content-Type", isIndex?httpdGetMimetype("index.html"):httpdGetMimetype(connData->url));
+		}
 		if (isGzip) {
 			httpdHeader(connData, "Content-Encoding", "gzip");
 		}
-		httpdHeader(connData, "Cache-Control", "max-age=3600, must-revalidate");
 		httpdEndHeaders(connData);
 		return HTTPD_CGI_MORE;
 	}
@@ -96,6 +154,8 @@ CgiStatus ICACHE_FLASH_ATTR cgiEspVfsHook(HttpdConnData *connData) {
 	if (len!=FILE_CHUNK_LEN) {
 		//We're done.
 		fclose(file);
+		ESP_LOGD(__func__, "fclose: %s, r", filename);
+
 		return HTTPD_CGI_DONE;
 	} else {
 		//Ok, till next time.
@@ -206,59 +266,211 @@ CgiStatus ICACHE_FLASH_ATTR cgiEspVfsTemplate(HttpdConnData *connData) {
 	}
 }
 
-CgiStatus   cgiEspVfsUpload(HttpdConnData *connData) {
-	FILE *file=connData->cgiData;
+static esp_err_t createMissingDirectories(char *fullpath) {
+	char *string, *tofree;
+	int err = ESP_OK;
+	tofree = string = strndup(fullpath, MAX_FILENAME_LENGTH); // make a copy because modifies input
+	assert(string != NULL);
+
+	int i;
+	for(i=0; string[i] != '\0'; i++) // search over all chars in fullpath
+	{
+		if (i>0 && (string[i] == '\\' || string[i] == '/')) // stop when reached a slash
+		{
+			struct stat sb;
+			char slash = string[i];
+			string[i] = '\0';  // replace slash with null terminator temporarily
+			if (stat(string, &sb) != 0) { // stat() will tell us if it is a file or directory or neither.
+				//printf("stat failed.\n");
+				if (errno == ENOENT)  /* No such file or directory */
+				{
+					// Create directory
+					int e = mkdir(string, S_IRWXU);
+					if (e != 0)
+					{
+						// if command not supported, it probably means you are using SPIFFS without directory support, that's OK, proceed.
+						if (errno == ENOTSUP) break; /* Command not supported? */
+						ESP_LOGE(__func__, "mkdir failed; errno=%d",errno);
+						err = ESP_FAIL;
+						break;
+					}
+					else
+					{
+						ESP_LOGI(__func__, "created the directory %s",string);
+					}
+				}
+		   }
+		   string[i] = slash; // replace the slash and keep searching fullpath
+	   }
+	}
+	free(tofree);  // don't skip this or memory-leak!
+	return err;
+}
+
+typedef struct {
+	enum {UPSTATE_START, UPSTATE_WRITE, UPSTATE_DONE, UPSTATE_ERR} state;
+	FILE *file;
 	char filename[MAX_FILENAME_LENGTH + 1];
-	char output[FILE_CHUNK_LEN];	//Temporary buffer for HTML output
-	int len;
+	int b_written;
+	const char *errtxt;
+} UploadState;
+
+CgiStatus   cgiEspVfsUpload(HttpdConnData *connData) {
+	UploadState *state=(UploadState *)connData->cgiData;
     
 	if (connData->isConnectionClosed) {
 		//Connection aborted. Clean up.
-		if(file != NULL){
-			fclose(file);
+		if (state != NULL)
+		{
+			if(state->file != NULL){
+				fclose(state->file);
+				ESP_LOGD(__func__, "fclose: %s, r", state->filename);
+			}
+			free(state);
 		}
+		ESP_LOGE(__func__, "Connection aborted!");
 		return HTTPD_CGI_DONE;
 	}
 
 	//First call to this cgi.
-	if (file==NULL) {
-		filename[0] = '\0';
-
-		if (connData->requestType!=HTTPD_METHOD_PUT) {
-			httpdStartResponse(connData, 405);  //http error code 'Method Not Allowed'
-			httpdEndHeaders(connData);
-			return HTTPD_CGI_DONE;
-		} else {
-			if(connData->cgiArg != NULL){
-				strncpy(filename, connData->cgiArg, MAX_FILENAME_LENGTH);
-			}
-
-			strncat(filename, "/", MAX_FILENAME_LENGTH - strlen(filename));
-			strncat(filename, connData->getArgs, MAX_FILENAME_LENGTH - strlen(filename));
-			ESP_LOGI(__func__, "Uploading: %s", filename);
-
-			file = fopen(filename, "w");
-			connData->cgiData = file;
+	if (state == NULL) {
+		if (!(connData->requestType==HTTPD_METHOD_PUT || connData->requestType==HTTPD_METHOD_POST)) {
+			return HTTPD_CGI_NOTFOUND;  //	return and allow another cgi function to handle it
 		}
+		//First call. Allocate and initialize state variable.
+		state = malloc(sizeof(UploadState));
+		if (state==NULL) {
+			ESP_LOGE(__func__, "Can't allocate upload struct");
+			//return HTTPD_CGI_NOTFOUND;  // Let cgiNotFound() deal with extra post data.
+			state->state=UPSTATE_ERR;
+			goto error_first;
+		}
+		memset(state, 0, sizeof(UploadState));  // all members of state are initialized to 0
+		state->state = UPSTATE_START;
+
+		if (connData->post.multipartBoundary != NULL)
+		{
+			// todo: handle when uploaded file is POSTed in a multipart/form-data.  For now, just upload the file by itself (i.e. xhr.send(file), not xhr.send(form)).
+			ESP_LOGE(__func__, "Sorry! file upload in multipart/form-data is not supported yet.");
+			//return HTTPD_CGI_NOTFOUND;  // Let cgiNotFound() deal with extra post data.
+			state->state=UPSTATE_ERR;
+			goto error_first;
+		}
+
+		// cgiArg specifies where this function is allowed to write to.  It must be specified and can't be empty.
+		const char *basePath = connData->cgiArg;
+		if ((basePath == NULL) || (*basePath == 0)) {
+			state->state=UPSTATE_ERR;
+			goto error_first;
+		}
+		int n = strlcpy(state->filename, basePath, MAX_FILENAME_LENGTH);
+		if (n >= MAX_FILENAME_LENGTH) goto error_first;
+
+		// Is cgiArg a single file or a directory (with trailing slash)?
+		if ((state->filename)[n - 1] == '\\' || (state->filename)[n - 1] == '/') // check last char in cgiArg string for a slash
+		{
+			// Last char of cgiArg is a slash, assume it is a directory.
+			(state->filename)[--n] = 0; // remove the trailing slash
+
+			// get queryParameter "filename" : string
+		    int arglen = httpdFindArg(connData->getArgs, "filename", state->filename + n, MAX_FILENAME_LENGTH - n);
+		    // 3. (highest priority) Filename to write to is cgiArg + "filename" as specified by url parameter
+		    if (arglen > 0)
+		    {
+		    	// filename is already appended by httpdFindArg() above.
+		    }
+		    // 2. Filename to write to is cgiArg + "filename" as inside multipart/form-data --todo)
+		    else if (0)
+		    {
+				// Beginning of POST data (after first headers):
+				/*
+				-----------------------------190192493010810\r\n
+				Content-Disposition: form-data; name="file"; filename="/README.md"\r\n
+				Content-Type: application/octet-stream\r\n
+				\r\n
+				datadatadatadata...
+	            */
+		    }
+		    // 1: Filename to write to is cgiArg + url.
+		    else if(connData->url != NULL){
+				strncat(state->filename, connData->url, MAX_FILENAME_LENGTH - n);
+			}
+		}
+		else
+		{
+			// Last char of cgiArg is not a slash, assume a single file.
+			// Filename to write to is forced to cgiArg.  The filename specified in the PUT url or in the POST filename is simply ignored.
+			//   (Anyway, a proper ROUTE entry should enforce the PUT url matches the cgiArg. i.e.
+			//   ROUTE_CGI_ARG("/writeable_file.txt", cgiEspVfsPut, FS_BASE_PATH "/html/writeable_file.txt"))
+			// filename is already = basePath from strlcpy() above.
+		}
+
+
+		ESP_LOGI(__func__, "Uploading: %s", state->filename);
+
+		// Create missing directories
+		if (createMissingDirectories(state->filename) != ESP_OK)
+		{
+			state->errtxt="Error creating directory!";
+			state->state=UPSTATE_ERR;
+			goto error_first;
+		}
+
+		// Open file for writing
+		state->file = fopen(state->filename, "w");
+		if (state->file == NULL)
+		{
+			ESP_LOGE(__func__, "Can't open file for writing!");
+			state->errtxt="Can't open file for writing!";
+			state->state=UPSTATE_ERR;
+			goto error_first;
+		}
+
+		state->state=UPSTATE_WRITE;
+		ESP_LOGD(__func__, "fopen: %s, w", state->filename);
+
+error_first:
+		connData->cgiData=state;
 	}
 
-	ESP_LOGI(__func__, "Chunk: %d bytes, ", connData->post.buffLen);
-	fwrite(connData->post.buff, 1, connData->post.buffLen, file);
-	//todo: error check that bytes written == bufLen etc...
+	ESP_LOGD(__func__, "Chunk: %d bytes, ", connData->post.buffLen);
+
+	if (state->state==UPSTATE_WRITE) {
+		if(state->file != NULL){
+			int count = fwrite(connData->post.buff, 1, connData->post.buffLen, state->file);
+			state->b_written += count;
+			if (count != connData->post.buffLen)
+			{
+				state->state=UPSTATE_ERR;
+				ESP_LOGE(__func__, "error writing to filesystem!");
+			}
+			if (state->b_written >= connData->post.len){
+				state->state=UPSTATE_DONE;
+			}
+		} // else, Just eat up any bytes we receive.
+	} else if (state->state==UPSTATE_DONE) {
+		ESP_LOGE(__func__, "bogus bytes received after data received");
+		//Ignore those bytes.
+	} else if (state->state==UPSTATE_ERR) {
+		//Just eat up any bytes we receive.
+	}
+
 	if (connData->post.received == connData->post.len) {
 		//We're done.
-		fclose(file);
-		ESP_LOGI(__func__, "Total: %d bytes written, ", connData->post.received);
-		httpdStartResponse(connData, 200);
-		httpdHeader(connData, "Content-Type", "application/json");
-		httpdEndHeaders(connData);
+		cJSON *jsroot = cJSON_CreateObject();
+		if(state->file != NULL){
+			fclose(state->file);
+			ESP_LOGD(__func__, "fclose: %s, r", state->filename);
+		}
+		ESP_LOGI(__func__, "Total: %d bytes written.", state->b_written);
 
-		httpdSend(connData, "{", -1);
-		len = snprintf(output, FILE_CHUNK_LEN, "\"filename\": \"%s/%s\", ", (char *) connData->cgiArg, (char *) connData->getArgs);
-		httpdSend(connData, output, len);
-		len = snprintf(output, FILE_CHUNK_LEN, "\"size\": \"%d\" ", connData->post.received);
-		httpdSend(connData, output, len);
-		httpdSend(connData, "}", -1);
+		cJSON_AddStringToObject(jsroot, "filename", state->filename);
+		cJSON_AddNumberToObject(jsroot, "bytes received", connData->post.received);
+		cJSON_AddNumberToObject(jsroot, "bytes written", state->b_written);
+		cJSON_AddBoolToObject(jsroot, "success", state->state==UPSTATE_DONE);
+		free(state);
+
+		cgiJsonResponseCommon(connData, jsroot); // Send the json response!
 		return HTTPD_CGI_DONE;
 	} else {
 		//Ok, till next time.

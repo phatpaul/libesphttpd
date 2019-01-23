@@ -148,11 +148,19 @@ serveStaticFile(HttpdConnData *connData, const char* filepath) {
 
 		connData->cgiData=file;
 		httpdStartResponse(connData, 200);
-		httpdHeader(connData, "Content-Type", httpdGetMimetype(filepath));
+		// cgiArg2 specifies a function pointer to generate custom headers.
+		if (connData->cgiArg2 != NULL) {
+			cgiEspFsHookOptions *options = (cgiEspFsHookOptions*)(connData->cgiArg2);
+			(options->customHeadersFnPtr)(connData);
+		} else {
+			httpdHeader(connData, "Cache-Control", "max-age=3600, must-revalidate");
+			httpdHeader(connData, "Content-Type", httpdGetMimetype(filepath));
+		}
+
 		if (isGzip) {
 			httpdHeader(connData, "Content-Encoding", "gzip");
 		}
-		httpdHeader(connData, "Cache-Control", "max-age=3600, must-revalidate");
+
 		httpdEndHeaders(connData);
 		return HTTPD_CGI_MORE;
 	}
