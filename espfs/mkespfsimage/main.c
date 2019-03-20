@@ -25,7 +25,9 @@
 
 //Gzip
 #ifdef ESPFS_GZIP
-// If compiler complains about missing header, try running "sudo apt-get install zlib1g-dev"
+// If compiler complains about missing header, 
+// try running "sudo apt-get install zlib1g-dev"
+// or on msys2/mingw32, try "pacman -S zlib-devel"
 // to install missing package.
 #include <zlib.h>
 #endif
