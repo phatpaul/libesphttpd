@@ -84,7 +84,7 @@ CgiStatus ICACHE_FLASH_ATTR cgiEspVfsGet(HttpdConnData *connData) {
 		}
 	    //Filename to get is cgiArg + url.
 	    if(connData->url != NULL){
-			n = strlcpy(filename + n, connData->url, MAX_FILENAME_LENGTH - n);
+			n += strlcpy(filename + n, connData->url, MAX_FILENAME_LENGTH - n);
 		}
 
 		ESP_LOGD(__func__, "GET: %s", filename);
