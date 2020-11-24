@@ -17,6 +17,7 @@ Connector to let httpd use the espfs filesystem to serve the files in it.
 #ifdef CONFIG_ESPHTTPD_USE_ESPFS
 #include "espfs.h"
 #include "espfsformat.h"  // just for FLAG_GZIP
+#define LOG_LOCAL_LEVEL ESP_LOG_DEBUG
 #include "esp_log.h"
 const static char* TAG = "httpdespfs";
 
@@ -200,6 +201,11 @@ serveStaticFile(HttpdConnData *connData, const char* filepath) {
 
 	len=espFsRead(file, buff, FILE_CHUNK_LEN);
 	if (len>0) httpdSend(connData, buff, len);
+	// workaround if file size is exact multiple of FILE_CHUNK_LEN
+	if (len == 0){
+		httpdSend(connData,"\r\n",2);
+		ESP_LOGD(TAG, "multiple of 1024 detected!");
+	}
 	if (len!=FILE_CHUNK_LEN) {
 		//We're done.
 		espFsClose(file);
