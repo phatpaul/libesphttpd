@@ -21,7 +21,7 @@ const static char* TAG = "httpdespfs";
 
 #define FILE_CHUNK_LEN    1024
 
-// The static files marked with FLAG_GZIP are compressed and will be served with GZIP compression.
+// The static files marked with ESPFS_FLAG_GZIP are compressed and will be served with GZIP compression.
 // If the client does not advertise that he accepts GZIP send following warning message (telnet users for e.g.)
 static const char *gzipNonSupportedMessage = "HTTP/1.0 501 Not implemented\r\nServer: esp8266-httpd/"HTTPDVER"\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 52\r\n\r\nYour browser does not accept gzip-compressed data.\r\n";
 
@@ -134,7 +134,7 @@ serveStaticFile(HttpdConnData *connData, const char* filepath) {
 		}
 
 		// The gzip checking code is intentionally without #ifdefs because checking
-		// for FLAG_GZIP (which indicates gzip compressed file) is very easy, doesn't
+		// for ESPFS_FLAG_GZIP (which indicates gzip compressed file) is very easy, doesn't
 		// mean additional overhead and is actually safer to be on at all times.
 		// If there are no gzipped files in the image, the code bellow will not cause any harm.
 

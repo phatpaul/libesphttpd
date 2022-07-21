@@ -1,17 +1,26 @@
 # Libesphttpd intro
-&#x1F53A; Warning: The build is currently broken for ESP8266.  This fork does not currently support ESP8266 since we don't have a maintainer who is using that chip.
 
 Libesphttpd is a HTTP server library for the ESP8266/ESP32. It supports integration in projects
 running under the non-os and FreeRTOS-based SDK. Its core is clean and small, but it provides an
 extensible architecture with plugins to handle a flash-based compressed read-only filesystem
 for static files, a tiny template engine, websockets, a captive portal, and more.
 
+# Requirements
+
+ -  ESP32 
+    -  May work with other ESP32-xx variants, but not tested.
+    -  🔺ESP8266 is no longer supported in this fork.
+ -  ESP-IDF Version 4.x
+    -  🔺ESP-IDF Version 3.x is no longer supported (EOL).
+ -  CMAKE build system 
+    -  🔺legacy Make build is no longer maintained (PR welcome).
+
 # Examples
 
 There are two example projects that integrate this code, both a [non-os](http://git.spritesserver.nl/esphttpd.git/)
 as well as a [FreeRTOS-based](https://github.com/chmorgan/esphttpd-freertos) example. They show
-how to use libesphttpd to serve files from an ESP8266/ESP32 and illustrate a way to make an user associate
-the ESP8266/ESP32 with an access point from a standard webbrowser on a PC or mobile phone.
+how to use libesphttpd to serve files from an ESP32 and illustrate a way to make an user associate
+the ESP32 with an access point from a standard webbrowser on a PC or mobile phone.
 
 # Using with esp-idf (esp32)
 
@@ -32,7 +41,7 @@ See the 'How to use SSL' section below.
 Programming libesphttpd will require some knowledge of HTTP. Knowledge of the exact RFCs isn't needed,
 but it helps if you know the difference between a GET and a POST request, how HTTP headers work,
 what an mime-type is and so on. Furthermore, libesphttpd is written in the C language and uses the
-libraries available on the ESP8266/ESP32 SDK. It is assumed the developer knows C and has some experience 
+libraries available on the ESP-IDF. It is assumed the developer knows C and has some experience 
 with the SDK.
 
 ## Initializing libesphttpd
