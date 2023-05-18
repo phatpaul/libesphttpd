@@ -535,13 +535,13 @@ CgiStatus cgiWiFiScan(HttpdConnData *connData)
         char arg_buf[ARGBUFSIZE];
 
         uint32_t arg_clear = 0;
-        if (cgiGetArgDecU32(allArgs, "clear", &(arg_clear), arg_buf, sizeof(arg_buf)))
+        if (cgiGetArgDecU32(allArgs, "clear", &(arg_clear), arg_buf, sizeof(arg_buf)) == CGI_ARG_FOUND)
         {
             cJSON_AddNumberToObject(jsargs, "clear", arg_clear);
         }
 
         uint32_t arg_start = 0;
-        if (cgiGetArgDecU32(allArgs, "start", &(arg_start), arg_buf, sizeof(arg_buf)))
+        if (cgiGetArgDecU32(allArgs, "start", &(arg_start), arg_buf, sizeof(arg_buf)) == CGI_ARG_FOUND)
         {
             cJSON_AddNumberToObject(jsargs, "start", arg_start);
         }
@@ -1298,13 +1298,13 @@ CgiStatus cgiWiFiSetMode(HttpdConnData *connData)
     cJSON *jsargs = cJSON_AddObjectToObject(jsroot, "args");
 
     uint32_t arg_force = 0;
-    if (cgiGetArgDecU32(allArgs, "force", &(arg_force), arg_buf, sizeof(arg_buf)))
+    if (cgiGetArgDecU32(allArgs, "force", &(arg_force), arg_buf, sizeof(arg_buf)) == CGI_ARG_FOUND)
     {
         cJSON_AddNumberToObject(jsargs, "force", arg_force);
     }
     // Setting a new mode?
     wifi_mode_t new_mode;
-    if (cgiGetArgDecU32(allArgs, "mode", &new_mode, arg_buf, sizeof(arg_buf)))
+    if (cgiGetArgDecU32(allArgs, "mode", &new_mode, arg_buf, sizeof(arg_buf)) == CGI_ARG_FOUND)
     {
         cJSON_AddNumberToObject(jsargs, "mode", new_mode);
         if (new_mode < WIFI_MODE_NULL || new_mode >= WIFI_MODE_MAX)
@@ -1474,7 +1474,7 @@ CgiStatus cgiWiFiAPSettings(HttpdConnData *connData)
     // Get the args
     bool has_arg_chan = false;
     unsigned int chan;
-    if (cgiGetArgDecU32(allArgs, "chan", &chan, arg_buf, sizeof(arg_buf)))
+    if (cgiGetArgDecU32(allArgs, "chan", &chan, arg_buf, sizeof(arg_buf)) == CGI_ARG_FOUND)
     {
         if (chan < 1 || chan > 15)
         {
@@ -1488,14 +1488,14 @@ CgiStatus cgiWiFiAPSettings(HttpdConnData *connData)
 
     bool has_arg_ssid = false;
     char ssid[32]; /**< SSID of ESP32 soft-AP */
-    if (cgiGetArgString(allArgs, "ssid", ssid, sizeof(ssid)))
+    if (cgiGetArgString(allArgs, "ssid", ssid, sizeof(ssid)) == CGI_ARG_FOUND)
     {
         has_arg_ssid = true;
     }
 
     bool has_arg_pass = false;
     char pass[64]; /**< Password of ESP32 soft-AP */
-    if (cgiGetArgString(allArgs, "pass", pass, sizeof(pass)))
+    if (cgiGetArgString(allArgs, "pass", pass, sizeof(pass)) == CGI_ARG_FOUND)
     {
 
         has_arg_pass = true;
