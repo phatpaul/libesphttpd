@@ -177,7 +177,7 @@ CgiStatus cgiJsonResponseCommonMulti(HttpdConnData *connData, void **statepp, cJ
 
 		if (jsroot)
 		{
-			statep->tofree = statep->json_string = cJSON_Print(jsroot);
+			statep->tofree = statep->json_string = cJSON_PrintUnformatted(jsroot);
 			cJSON_Delete(jsroot); // we're done with the json object, now that it is stringified
 		}
 
