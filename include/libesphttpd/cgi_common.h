@@ -22,24 +22,10 @@ int cgiGetArgString(const char *allArgs, const char *argName, char *buff, int bu
 void cgiJsonResponseHeaders(HttpdConnData *connData);
 void cgiJavascriptResponseHeaders(HttpdConnData *connData);
 
-/**
- * Example usage of cgiJsonResponseCommonMulti for multipart json response (i.e. larger than 1kB)
- * 
-CgiStatus cgiFn(HttpdConnData *connData)
-{
-    cJSON *jsroot = NULL;
-    if (connData->cgiData == NULL)
-    {
-        //First call to this cgi.
-        jsroot = cJSON_CreateObject();
-        ...
-        cgiJsonResponseHeaders(connData);
-    }
-    return cgiJsonResponseCommonMulti(connData, &connData->cgiData, jsroot); // Send the json response!
-}
- */
+CgiStatus cgiResponseCommonMulti(HttpdConnData *connData, void **statepp, const char *toSendAndFree);
 CgiStatus cgiJsonResponseCommonMulti(HttpdConnData *connData, void **statepp, cJSON *jsroot);
 CgiStatus cgiJsonResponseCommonSingle(HttpdConnData *connData, cJSON *jsroot);
+CgiStatus cgiResponseCommonMultiCleanup(void **statepp);
 
 CgiStatus cgiJavascriptResponseCommon(HttpdConnData *connData, cJSON *jsroot, const char *jsObjName);
 
