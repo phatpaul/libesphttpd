@@ -10,11 +10,11 @@
 
 typedef struct
 {
-	char *tofree;
-	char *json_string;
+	const char *toFree; // keep a pointer to the beginning for free() when finished
+	const char *toSendPosition;
 	int len_to_send;
 	uint32_t magic;
-} cgiJsonResp_state_t;
+} cgiResp_state_t;
 
 /**
  * @brief  Common routine for parsing GET or POST parameters.
@@ -63,7 +63,7 @@ static int cgiGetArgCommon(const char *allArgs, const char *argName, const char 
 
 /**
  * @brief Parses *allArgs (i.e. connData->getArgs or connData->post.buff) for a signed integer by name of *argName and returns int value at *pvalue.
- * 
+ *
  * @param allArgs String to search in i.e. connData->getArgs or connData->post.buff
  * @param argName Name of argument to find
  * @param pvalue return value parsed
@@ -78,7 +78,7 @@ int cgiGetArgDecS32(const char *allArgs, const char *argName, int *pvalue, char 
 
 /**
  * @brief Parses *allArgs (i.e. connData->getArgs or connData->post.buff) for a unsigned int (i.e. ?uintval=123)
- * 
+ *
  * @param allArgs String to search in i.e. connData->getArgs or connData->post.buff
  * @param argName Name of argument to find
  * @param pvalue return value parsed
@@ -93,7 +93,7 @@ int cgiGetArgDecU32(const char *allArgs, const char *argName, uint32_t *pvalue, 
 
 /**
  * @brief Parses *allArgs (i.e. connData->getArgs or connData->post.buff) for a uint32_t from a hexadecimal string (i.e. ?hexval=0123ABCD )
- * 
+ *
  * @param allArgs String to search in i.e. connData->getArgs or connData->post.buff
  * @param argName Name of argument to find
  * @param pvalue return value parsed
@@ -108,7 +108,7 @@ int cgiGetArgHexU32(const char *allArgs, const char *argName, uint32_t *pvalue, 
 
 /**
  * @brief Parses *allArgs (i.e. connData->getArgs or connData->post.buff) for a string value.  (just a wrapper for httpdFindArg())
- * 
+ *
  * @param allArgs String to search in i.e. connData->getArgs or connData->post.buff
  * @param argName Name of argument to find
  * @param buff Supply a buffer to copy the value found.
@@ -148,42 +148,60 @@ void cgiJavascriptResponseHeaders(HttpdConnData *connData)
 	httpdEndHeaders(connData);
 }
 
-CgiStatus cgiJsonResponseCommonMulti(HttpdConnData *connData, void **statepp, cJSON *jsroot)
+CgiStatus cgiResponseCommonMultiCleanup(void **statepp)
 {
-	cgiJsonResp_state_t *statep = NULL; // statep is local pointer to state
-	if (statepp != NULL)				// If statepp is passed in (from previous call), set local pointer.
+	cgiResp_state_t *statep = NULL; // statep is local pointer to state
+	if (statepp != NULL)
 	{
-		statep = *(cgiJsonResp_state_t **)statepp; // dereference statepp to get statep
+		statep = *(cgiResp_state_t **)statepp; // dereference statepp to get statep
+		if (statep)
+		{
+			if (statep->toFree)
+			{
+				free(statep->toFree);
+			}
+			free(statep); // clear state
+		}
+		*statepp = NULL; // clear external pointer
+	}
+	return HTTPD_CGI_DONE;
+}
+/**
+ * @brief Send a string that is longer than can fit in a single call to httpdSend().  The string is freed when done.
+ *
+ * @param connData HttpdConnData
+ * @param statepp Opaque pointer-pointer state
+ * @param toSendAndFree String buffer. Note this function will call free() on this string when finished!
+ * @return CgiStatus HTTPD_CGI_DONE: no need to call again.  HTTPD_CGI_MORE: Need to call this again to finish sending.
+ */
+CgiStatus cgiResponseCommonMulti(HttpdConnData *connData, void **statepp, const char *toSendAndFree)
+{
+	cgiResp_state_t *statep = NULL; // statep is local pointer to state
+	if (statepp != NULL)			// If statepp is passed in (from previous call), set local pointer.
+	{
+		statep = *(cgiResp_state_t **)statepp; // dereference statepp to get statep
 	}
 
-	if (statep == NULL || statep->tofree == NULL) // first call?
+	if (statep == NULL) // first call?
 	{
+		// statep is NULL, need to alloc memory for the state
+		statep = calloc(1, sizeof(cgiResp_state_t)); // all members init to 0
 		if (statep == NULL)
 		{
-			// statep is NULL, need to alloc memory for the state
-			statep = calloc(1, sizeof(cgiJsonResp_state_t)); // all members init to 0
-			if (statep == NULL)
-			{
-				ESP_LOGE(__func__, "calloc failed!");
-				cJSON_Delete(jsroot); // Free memory since we can't use it
-				return HTTPD_CGI_DONE;
-			}
-			statep->magic = MAGICNUM; // write a magic number to the state to validate it later
-			if (statepp != NULL)	  // caller passed in pointer to statep?
-			{
-				*statepp = statep; // set external pointer for later
-			}
+			ESP_LOGE(__func__, "calloc failed!");
+			return HTTPD_CGI_DONE;
+		}
+		statep->magic = MAGICNUM; // write a magic number to the state to validate it later
+		if (statepp != NULL)	  // caller passed in pointer to statep?
+		{
+			*statepp = statep; // set external pointer for later
 		}
 
-		if (jsroot)
-		{
-			statep->tofree = statep->json_string = cJSON_PrintUnformatted(jsroot);
-			cJSON_Delete(jsroot); // we're done with the json object, now that it is stringified
-		}
+		statep->toFree = statep->toSendPosition = toSendAndFree;
 
-		if (statep->json_string)
+		if (statep->toSendPosition)
 		{
-			statep->len_to_send = strlen(statep->json_string);
+			statep->len_to_send = strlen(statep->toSendPosition);
 		}
 		ESP_LOGD(__func__, "tosendtotal: %d", statep->len_to_send);
 	}
@@ -203,11 +221,11 @@ CgiStatus cgiJsonResponseCommonMulti(HttpdConnData *connData, void **statepp, cJ
 		size_t max_send_size = SENDBUFSIZE;
 		size_t len_to_send_this_time = (statep->len_to_send < max_send_size) ? (statep->len_to_send) : (max_send_size);
 		ESP_LOGD(__func__, "tosendthistime: %d", len_to_send_this_time);
-		int success = httpdSend(connData, statep->json_string, len_to_send_this_time);
+		int success = httpdSend(connData, statep->toSendPosition, len_to_send_this_time);
 		if (success)
 		{
 			statep->len_to_send -= len_to_send_this_time;
-			statep->json_string += len_to_send_this_time;
+			statep->toSendPosition += len_to_send_this_time;
 		}
 		else
 		{
@@ -220,21 +238,53 @@ CgiStatus cgiJsonResponseCommonMulti(HttpdConnData *connData, void **statepp, cJ
 		(statepp == NULL))			// or called without state pointer (single send)
 	{
 		ESP_LOGD(__func__, "freeing");
-		if (statep->tofree)
-		{
-			cJSON_free(statep->tofree);
-			statep->tofree = NULL;
-		}
-		free(statep); // clear state
-		statep = NULL;
-		if (statepp != NULL) // was pointer to state passed in?
-		{
-			*statepp = NULL; // clear external pointer
-		}
-
+		cgiResponseCommonMultiCleanup(statepp);
 		return HTTPD_CGI_DONE;
 	}
 	return HTTPD_CGI_MORE;
+}
+
+/**
+ * @brief Send a multipart json response (i.e. larger than 1kB). The json object is freed when done.
+ *
+ * @param connData HttpdConnData
+ * @param statepp Opaque pointer-pointer state
+ * @param jsroot cJSON object to send
+ * @return CgiStatus HTTPD_CGI_DONE: no need to call again.  HTTPD_CGI_MORE: Need to call this again to finish sending.
+ *
+ * @example
+		CgiStatus cgiFn(HttpdConnData *connData)
+		{
+			if (connData->isConnectionClosed)
+			{
+				// Connection aborted. Clean up.
+				cgiResponseCommonMultiCleanup(&connData->cgiData);
+				return HTTPD_CGI_DONE;
+			}
+			cJSON *jsroot = NULL;
+			if (connData->cgiData == NULL)
+			{
+				//First call to this cgi.
+				jsroot = cJSON_CreateObject();
+				...
+				cgiJsonResponseHeaders(connData);
+			}
+			return cgiJsonResponseCommonMulti(connData, &connData->cgiData, jsroot); // Send the json response!
+		}
+ */
+CgiStatus cgiJsonResponseCommonMulti(HttpdConnData *connData, void **statepp, cJSON *jsroot)
+{
+	// This wrapper for cgiResponseCommonMulti() doesn't need it's own state.
+	// We can determine if this is the first call by testing **statepp
+
+	const char *stringToSend = NULL;
+	if (statepp == NULL || *statepp == NULL) // First call?
+	{
+		stringToSend = cJSON_PrintUnformatted(jsroot);
+		cJSON_Delete(jsroot); // we're done with the json object, now that it is stringified
+	}
+
+	return cgiResponseCommonMulti(connData, statepp, stringToSend); // will free stringToSend when done
 }
 
 CgiStatus cgiJsonResponseCommonSingle(HttpdConnData *connData, cJSON *jsroot)
