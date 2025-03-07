@@ -3,6 +3,11 @@
 
 #include "httpd.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+
 //This is a catch-all cgi function. It takes the url passed to it, looks up the corresponding
 //path in the filesystem and if it exists, passes the file through. This simulates what a normal
 //webserver would do with static files.
@@ -38,5 +43,9 @@ CgiStatus cgiEspVfsGet(HttpdConnData *connData);
 //           - Allows only replacing content of one file at "/base/directory/writeable_file.txt".
 //           - example: POST or PUT http://1.2.3.4/writeable_file.txt
 CgiStatus cgiEspVfsUpload(HttpdConnData *connData);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif //ESP32_HTTPD_VFS_H
