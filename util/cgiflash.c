@@ -229,13 +229,17 @@ CgiStatus ICACHE_FLASH_ATTR cgiUploadFirmware(HttpdConnData *connData) {
 						esp_partition_subtype_t old_subtype = state->update_partition->subtype;
 						esp_partition_subtype_t *pst = &(state->update_partition->subtype); // remove the const
 						*pst = ESP_PARTITION_SUBTYPE_APP_OTA_MAX -1; // hack! set the type to an OTA to trick API into allowing write.
-					err = esp_ota_begin(state->update_partition, OTA_SIZE_UNKNOWN, &state->update_handle);
+						// Enable OTA_WITH_SEQUENTIAL_WRITES which helps keep WiFi connection robust during OTA :)
+						// See https://github.com/espressif/esp-idf/pull/5246
+						err = esp_ota_begin(state->update_partition, OTA_WITH_SEQUENTIAL_WRITES, &state->update_handle);
 						*pst = old_subtype; // put the value back to original now
 					}
 					else 
 #endif
 					{
-						err = esp_ota_begin(state->update_partition, OTA_SIZE_UNKNOWN, &state->update_handle);
+						// Enable OTA_WITH_SEQUENTIAL_WRITES which helps keep WiFi connection robust during OTA :)
+						// See https://github.com/espressif/esp-idf/pull/5246
+						err = esp_ota_begin(state->update_partition, OTA_WITH_SEQUENTIAL_WRITES, &state->update_handle); 
 					}
 
 					if (err != ESP_OK)
