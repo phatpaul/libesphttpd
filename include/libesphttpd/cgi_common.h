@@ -22,7 +22,7 @@ int cgiGetArgString(const char *allArgs, const char *argName, char *buff, int bu
 void cgiJsonResponseHeaders(HttpdConnData *connData);
 void cgiJavascriptResponseHeaders(HttpdConnData *connData);
 
-CgiStatus cgiResponseCommonMulti(HttpdConnData *connData, void **statepp, const char *toSendAndFree);
+CgiStatus cgiResponseCommonMulti(HttpdConnData *connData, void **statepp, char *toSendAndFree);
 CgiStatus cgiJsonResponseCommonMulti(HttpdConnData *connData, void **statepp, cJSON *jsroot);
 CgiStatus cgiJsonResponseCommonSingle(HttpdConnData *connData, cJSON *jsroot);
 CgiStatus cgiResponseCommonMultiCleanup(void **statepp);

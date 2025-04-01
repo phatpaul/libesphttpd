@@ -10,7 +10,7 @@
 
 typedef struct
 {
-	const char *toFree; // keep a pointer to the beginning for free() when finished
+	void *toFree; // keep a pointer to the beginning for free() when finished
 	const char *toSendPosition;
 	int len_to_send;
 	uint32_t magic;
@@ -174,7 +174,7 @@ CgiStatus cgiResponseCommonMultiCleanup(void **statepp)
  * @param toSendAndFree String buffer. Note this function will call free() on this string when finished!
  * @return CgiStatus HTTPD_CGI_DONE: no need to call again.  HTTPD_CGI_MORE: Need to call this again to finish sending.
  */
-CgiStatus cgiResponseCommonMulti(HttpdConnData *connData, void **statepp, const char *toSendAndFree)
+CgiStatus cgiResponseCommonMulti(HttpdConnData *connData, void **statepp, char *toSendAndFree)
 {
 	cgiResp_state_t *statep = NULL; // statep is local pointer to state
 	if (statepp != NULL)			// If statepp is passed in (from previous call), set local pointer.
@@ -197,7 +197,8 @@ CgiStatus cgiResponseCommonMulti(HttpdConnData *connData, void **statepp, const 
 			*statepp = statep; // set external pointer for later
 		}
 
-		statep->toFree = statep->toSendPosition = toSendAndFree;
+		statep->toFree = toSendAndFree;
+		statep->toSendPosition = toSendAndFree;
 
 		if (statep->toSendPosition)
 		{
@@ -277,7 +278,7 @@ CgiStatus cgiJsonResponseCommonMulti(HttpdConnData *connData, void **statepp, cJ
 	// This wrapper for cgiResponseCommonMulti() doesn't need it's own state.
 	// We can determine if this is the first call by testing **statepp
 
-	const char *stringToSend = NULL;
+	char *stringToSend = NULL;
 	if (statepp == NULL || *statepp == NULL) // First call?
 	{
 		stringToSend = cJSON_PrintUnformatted(jsroot);
