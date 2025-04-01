@@ -2,6 +2,7 @@
 #define CGIWEBSOCKET_H
 
 #include "httpd.h"
+#include "kref.h"
 
 #define WEBSOCK_FLAG_NONE 0
 #define WEBSOCK_FLAG_MORE (1<<0) //Set if the data is not the final data in the message; more follows
@@ -22,6 +23,7 @@ typedef void(*WsSentCb)(Websock *ws);
 typedef void(*WsCloseCb)(Websock *ws);
 
 struct Websock {
+    struct kref ref_cnt; // reference count
 	void *userData;
 	HttpdConnData *conn;
 	uint8_t status;
