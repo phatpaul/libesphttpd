@@ -10,6 +10,8 @@ Websocket support for esphttpd. Inspired by https://github.com/dangrie158/ESP-82
 #include <libesphttpd/linux.h>
 #else
 #include <libesphttpd/esp.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #endif
 
 #include "libesphttpd/httpd.h"
@@ -18,6 +20,7 @@ Websocket support for esphttpd. Inspired by https://github.com/dangrie158/ESP-82
 #include "libesphttpd_base64.h"
 #include "libesphttpd/cgiwebsocket.h"
 
+#define LOG_LOCAL_LEVEL ESP_LOG_DEBUG
 #include "esp_log.h"
 const static char* TAG = "cgiwebsocket";
 
@@ -84,10 +87,117 @@ struct WebsockPriv {
 	uint8 frameCont;
 	uint8 closedHere;
 	int wsStatus;
-	Websock *next; //in linked list
 };
 
-static Websock *llStart=NULL;
+
+#define WEBSOCK_LIST_SIZE (32)
+// List of active Websockets (TODO: not support multiple httpd instances yet)
+static Websock *wsList[WEBSOCK_LIST_SIZE] = {NULL};
+// Recursive mutex to protect list
+static SemaphoreHandle_t wsListMutex=NULL;
+
+// Lock access to list
+static bool ICACHE_FLASH_ATTR wsListLock(void)
+{
+	if (wsListMutex == NULL) {
+		wsListMutex = xSemaphoreCreateRecursiveMutex();
+	}
+	assert(wsListMutex != NULL);
+	ESP_LOGD(TAG, "Lock list. Task: %p", xTaskGetCurrentTaskHandle());
+	// Take the mutex recursively
+	if (pdTRUE != xSemaphoreTakeRecursive(wsListMutex, portMAX_DELAY)) {
+		ESP_LOGE(TAG, "Failed to take mutex");
+		return false;
+	}
+	return true;
+}
+
+// Unlock list access
+static void ICACHE_FLASH_ATTR wsListUnlock(void)
+{
+	assert(wsListMutex != NULL);
+	ESP_LOGD(TAG, "Unlock list. Task: %p", xTaskGetCurrentTaskHandle());
+	// Give the mutex recursively
+	xSemaphoreGiveRecursive(wsListMutex);
+}
+
+
+/* Get a reference counted pointer to a Websock object by index. *\
+\* Must be released via put_websock()!                           */
+static struct Websock *get_websock(unsigned int index)
+{
+	Websock *ws = NULL;
+	if ((index < WEBSOCK_LIST_SIZE) && (NULL != wsList[index]))
+	{
+		if (wsListLock())
+		{
+			if (wsList[index] != NULL) // double check for NULL now that we have the lock
+			{
+				ws = wsList[index];
+				kref_get(&(ws->ref_cnt));
+			}
+			wsListUnlock();
+		}
+	}
+
+	return ws;
+}
+
+/* Free data, must only be called by kref_put()! */
+static void ICACHE_FLASH_ATTR free_websock(struct kref *ref)
+{
+	ESP_LOGD(TAG, "websockFree");
+	Websock *ws;
+
+	ws = kcontainer_of(ref, Websock, ref_cnt);
+	if (ws->closeCb) ws->closeCb(ws);
+	if (ws->priv) free(ws->priv);
+	// Note we don't free ws->conn, since it is managed by the httpd instance.
+	free(ws);
+	// still need to NULL the pointer in the list
+}
+
+/* Drop a reference to a Websock, possibly freeing it. */
+static void put_websock(Websock *ws)
+{
+	assert(ws != NULL);
+	kref_put(&(ws->ref_cnt), free_websock);
+}
+
+// Add websocket to list, and garbage collect dead websockets
+static void ICACHE_FLASH_ATTR wsListAddAndGC(Websock *ws)
+{
+	ESP_LOGD(TAG, "Adding to list. Task: %p", xTaskGetCurrentTaskHandle());
+	if (wsListLock()) // protect access to list, since it could be used/modified outside this thread
+	{
+		// Garbage collection
+		for (int i = 0; i < WEBSOCK_LIST_SIZE; i++) {
+			if (wsList[i] != NULL) {
+				if (wsList[i]->conn->isConnectionClosed) {
+					ESP_LOGD(TAG, "Cleaning up websocket %p", wsList[i]);
+					put_websock(wsList[i]); // decrement reference count
+					wsList[i] = NULL;
+				}
+			}
+		}
+		// Insert ws into list
+		int j = 0;
+		// Find first empty slot
+		for (; j < WEBSOCK_LIST_SIZE; j++) {
+			// Check if slot is empty
+			if (wsList[j] == NULL) {
+				ESP_LOGD(TAG, "Adding websocket %p to slot %d", ws, j);
+				kref_get(&(ws->ref_cnt)); // increment reference count
+				wsList[j] = ws;
+				break;
+			}
+		}
+		if (j == WEBSOCK_LIST_SIZE) {
+			ESP_LOGE(TAG, "Websocket list full");
+		}
+		wsListUnlock();
+	}
+}
 
 static int ICACHE_FLASH_ATTR sendFrameHead(Websock *ws, int opcode, int len) {
 	char buf[14];
@@ -140,16 +250,32 @@ int ICACHE_FLASH_ATTR cgiWebsocketSend(HttpdInstance *pInstance, Websock *ws, co
 
 //Broadcast data to all websockets at a specific url. Returns the amount of connections sent to.
 int ICACHE_FLASH_ATTR cgiWebsockBroadcast(HttpdInstance *pInstance, const char *resource, const char *data, int len, int flags) {
-	Websock *lw=llStart;
 	int ret=0;
-	while (lw!=NULL) {
-		if (strcmp(lw->conn->url, resource)==0) {
-			httpdConnSendStart(pInstance, lw->conn);
-			cgiWebsocketSend(pInstance, lw, data, len, flags);
-			httpdConnSendFinish(pInstance, lw->conn);
-			ret++;
+
+	for (int i=0; i<WEBSOCK_LIST_SIZE; i++) {
+		Websock *lw = get_websock(i); // get a reference counted pointer to the Websock object
+		if (NULL != lw){
+
+		// if ((NULL == lw->conn) || lw->conn->isConnectionClosed) {
+		//     ESP_LOGD(TAG, "Websocket %p closed", lw);
+		//     // Remove the websocket from the list
+		//     wsList[i] = NULL;
+		//     put_websock(lw); // decrement reference count for the list
+		//     continue;
+		// }
+        
+		if ((NULL != lw->conn) && strcmp(lw->conn->url, resource) == 0) {
+		cgiWebsocketSend(pInstance, lw, data, len, flags);
+		ret++;
 		}
-		lw=lw->priv->next;
+			put_websock(lw); // decrement reference count for local copy
+		}
+    }
+	if (ret == 0) {
+		ESP_LOGD(TAG, "No websockets found for resource %s", resource);
+	}
+	else {
+		ESP_LOGD(TAG, "Broadcasted %d bytes to %d websockets", len, ret);
 	}
 	return ret;
 }
@@ -165,27 +291,13 @@ void ICACHE_FLASH_ATTR cgiWebsocketClose(HttpdInstance *pInstance, Websock *ws, 
 	httpdPlatUnlock(pInstance);
 }
 
-
-static void ICACHE_FLASH_ATTR websockFree(Websock *ws) {
-	ESP_LOGD(TAG, "");
-	if (ws->closeCb) ws->closeCb(ws);
-	//Clean up linked list
-	if (llStart==ws) {
-		llStart=ws->priv->next;
-	} else if (llStart) {
-		Websock *lws=llStart;
-		//Find ws that links to this one.
-		while (lws!=NULL && lws->priv->next!=ws) lws=lws->priv->next;
-		if (lws!=NULL) lws->priv->next=ws->priv->next;
-	}
-	if (ws->priv) free(ws->priv);
-}
-
 CgiStatus ICACHE_FLASH_ATTR cgiWebSocketRecv(HttpdInstance *pInstance, HttpdConnData *connData, char *data, int len) {
 	int i, j, sl;
 	int r=HTTPD_CGI_MORE;
 	int wasHeaderByte;
 	Websock *ws=(Websock*)connData->cgiData;
+	assert(ws != NULL);
+	kref_get(&(ws->ref_cnt)); // increment reference count
 	for (i=0; i<len; i++) {
 //		httpd_printf("Ws: State %d byte 0x%02X\n", ws->priv->wsStatus, data[i]);
 		wasHeaderByte=1;
@@ -286,10 +398,10 @@ CgiStatus ICACHE_FLASH_ATTR cgiWebSocketRecv(HttpdInstance *pInstance, HttpdConn
 	if (r==HTTPD_CGI_DONE) {
 		//We're going to tell the main webserver we're done. The webserver expects us to clean up by ourselves
 		//we're chosing to be done. Do so.
-		websockFree(ws);
-		free(connData->cgiData);
+		put_websock(ws); // drop reference for connData->cgiData
 		connData->cgiData=NULL;
 	}
+	put_websock(ws); // drop reference for local ws, possibly free it if no one else is using it
 	return r;
 }
 
@@ -303,39 +415,41 @@ CgiStatus ICACHE_FLASH_ATTR cgiWebsocket(HttpdConnData *connData) {
 		ESP_LOGD(TAG, "Cleanup");
 		if (connData->cgiData) {
 			Websock *ws=(Websock*)connData->cgiData;
-			websockFree(ws);
-			free(connData->cgiData);
+			put_websock(ws); // drop reference for connData->cgiData
 			connData->cgiData=NULL;
 		}
 		return HTTPD_CGI_DONE;
 	}
 
 	if (connData->cgiData==NULL) {
-//		httpd_printf("WS: First call\n");
+		ESP_LOGV(TAG, "WS: First call");
 		//First call here. Check if client headers are OK, send server header.
 		i=httpdGetHeader(connData, "Upgrade", buff, sizeof(buff)-1);
 		ESP_LOGD(TAG, "Upgrade: %s", buff);
 		if (i && strcasecmp(buff, "websocket")==0) {
 			i=httpdGetHeader(connData, "Sec-WebSocket-Key", buff, sizeof(buff)-1);
 			if (i) {
-//				httpd_printf("WS: Key: %s\n", buff);
+				ESP_LOGV(TAG, "WS: Key: %s", buff);
 				//Seems like a WebSocket connection.
 				// Alloc structs
-				connData->cgiData=malloc(sizeof(Websock));
-				if (connData->cgiData==NULL) {
+				Websock *ws = calloc(1, sizeof(Websock));
+				if (ws == NULL) {
 					ESP_LOGE(TAG, "Can't allocate mem for websocket");
 					return HTTPD_CGI_DONE;
 				}
-				memset(connData->cgiData, 0, sizeof(Websock));
-				Websock *ws=(Websock*)connData->cgiData;
-				ws->priv=malloc(sizeof(WebsockPriv));
+				kref_init(&(ws->ref_cnt)); // initialises ref_cnt to 1
+				ws->priv = calloc(1, sizeof(WebsockPriv));
 				if (ws->priv==NULL) {
 					ESP_LOGE(TAG, "Can't allocate mem for websocket priv");
-					free(connData->cgiData);
+					if (ws != NULL)
+					{
+						put_websock(ws); // drop reference
+					}
 					connData->cgiData=NULL;
 					return HTTPD_CGI_DONE;
 				}
-				memset(ws->priv, 0, sizeof(WebsockPriv));
+
+				// Store a reference to the connData, but note that ws doesn't own it.
 				ws->conn=connData;
 				//Reply with the right headers.
 				strcat(buff, WS_GUID);
@@ -353,14 +467,14 @@ CgiStatus ICACHE_FLASH_ATTR cgiWebsocket(HttpdConnData *connData) {
 				//Inform CGI function we have a connection
 				WsConnectedCb connCb=connData->cgiArg;
 				connCb(ws);
-				//Insert ws into linked list
-				if (llStart==NULL) {
-					llStart=ws;
-				} else {
-					Websock *lw=llStart;
-					while (lw->priv->next) lw=lw->priv->next;
-					lw->priv->next=ws;
-				}
+
+				// Add a reference count, since it is stored on connData->cgiData until the connection is closed
+				kref_get(&(ws->ref_cnt));
+				connData->cgiData = ws;
+
+				wsListAddAndGC(ws); // add to list, will add another reference count
+
+				put_websock(ws); // drop reference to local ws
 				return HTTPD_CGI_MORE;
 			}
 		}
