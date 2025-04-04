@@ -6,6 +6,10 @@
 #define CGIFLASH_TYPE_FW 0
 #define CGIFLASH_TYPE_ESPFS 1
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct {
 	int type;
 	int fw1Pos;
@@ -21,4 +25,7 @@ CgiStatus cgiSetBoot(HttpdConnData *connData);
 CgiStatus cgiEraseFlash(HttpdConnData *connData);
 CgiStatus cgiGetFlashInfo(HttpdConnData *connData);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

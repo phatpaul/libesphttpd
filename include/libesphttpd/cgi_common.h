@@ -6,6 +6,10 @@
 #include "libesphttpd/httpd.h"
 #include "cJSON.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // this should be more efficient than httpdSend(,,-1) using strlen() at runtime on constant strings
 #define HTTP_SEND_CONST(connData, constString) httpdSend(connData, constString, sizeof(constString)-1) //-1 to skip sending the null-terminator
 
@@ -22,11 +26,14 @@ int cgiGetArgString(const char *allArgs, const char *argName, char *buff, int bu
 void cgiJsonResponseHeaders(HttpdConnData *connData);
 void cgiJavascriptResponseHeaders(HttpdConnData *connData);
 
-CgiStatus cgiResponseCommonMulti(HttpdConnData *connData, void **statepp, const char *toSendAndFree);
+CgiStatus cgiResponseCommonMulti(HttpdConnData *connData, void **statepp, char *toSendAndFree);
 CgiStatus cgiJsonResponseCommonMulti(HttpdConnData *connData, void **statepp, cJSON *jsroot);
 CgiStatus cgiJsonResponseCommonSingle(HttpdConnData *connData, cJSON *jsroot);
 CgiStatus cgiResponseCommonMultiCleanup(void **statepp);
 
 CgiStatus cgiJavascriptResponseCommon(HttpdConnData *connData, cJSON *jsroot, const char *jsObjName);
 
+#ifdef __cplusplus
+}
+#endif
 #endif //CGI_COMMON_H
