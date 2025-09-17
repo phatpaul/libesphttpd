@@ -29,7 +29,7 @@ static const char *TAG = "ota";
 
 #define PARTITION_IS_FACTORY(partition) ((partition->type == ESP_PARTITION_TYPE_APP) && (partition->subtype == ESP_PARTITION_SUBTYPE_APP_FACTORY))
 #define PARTITION_IS_OTA(partition) ((partition->type == ESP_PARTITION_TYPE_APP) && (partition->subtype != ESP_PARTITION_SUBTYPE_APP_TEST) && (partition->subtype >= ESP_PARTITION_SUBTYPE_APP_OTA_MIN) && (partition->subtype <= ESP_PARTITION_SUBTYPE_APP_OTA_MAX))
-
+#define PARTITION_IS_TEST(partition) ((partition->type == ESP_PARTITION_TYPE_APP) && (partition->subtype == ESP_PARTITION_SUBTYPE_APP_TEST))
 
 // Check that the header of the firmware blob looks like actual firmware...
 static int ICACHE_FLASH_ATTR checkBinHeader(void *buf) {
@@ -232,7 +232,7 @@ CgiStatus ICACHE_FLASH_ATTR cgiUploadFirmware(HttpdConnData *connData) {
 
 #ifdef CONFIG_ESPHTTPD_ALLOW_OTA_FACTORY_APP
 					// hack the API to allow write to the factory partition!
-					if (PARTITION_IS_FACTORY(state->update_partition))
+					if (PARTITION_IS_FACTORY(state->update_partition) || PARTITION_IS_TEST(state->update_partition))
 					{
 						esp_partition_subtype_t old_subtype = state->update_partition->subtype;
 						esp_partition_subtype_t *pst = &(state->update_partition->subtype); // remove the const
@@ -242,12 +242,12 @@ CgiStatus ICACHE_FLASH_ATTR cgiUploadFirmware(HttpdConnData *connData) {
 						err = esp_ota_begin(state->update_partition, OTA_WITH_SEQUENTIAL_WRITES, &state->update_handle);
 						*pst = old_subtype; // put the value back to original now
 					}
-					else 
+					else
 #endif
 					{
 						// Enable OTA_WITH_SEQUENTIAL_WRITES which helps keep WiFi connection robust during OTA :)
 						// See https://github.com/espressif/esp-idf/pull/5246
-						err = esp_ota_begin(state->update_partition, OTA_WITH_SEQUENTIAL_WRITES, &state->update_handle); 
+						err = esp_ota_begin(state->update_partition, OTA_WITH_SEQUENTIAL_WRITES, &state->update_handle);
 					}
 
 					if (err != ESP_OK)
@@ -300,7 +300,7 @@ CgiStatus ICACHE_FLASH_ATTR cgiUploadFirmware(HttpdConnData *connData) {
 				status.received = connData->post.received;
 				def->progressCb(&status);
 			}
-			
+
 		} else if (state->state==FLST_DONE) {
 			ESP_LOGE(TAG, "%d bogus bytes received after data received", dataLen);
 			//Ignore those bytes.
