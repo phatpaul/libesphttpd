@@ -20,7 +20,7 @@ Http server - core routines
 
 #include "libesphttpd/httpd.h"
 #include "httpd-platform.h"
-
+//#define LOG_LOCAL_LEVEL ESP_LOG_DEBUG // Uncomment to Enable debug logging for this file only.
 #include "esp_log.h"
 
 const static char* TAG = "httpd";
@@ -223,8 +223,104 @@ void ICACHE_FLASH_ATTR httpdSetTransferMode(HttpdConnData *conn, TransferModes m
     }
 }
 
-//Start the response headers.
-void ICACHE_FLASH_ATTR httpdStartResponse(HttpdConnData *conn, int code) {
+//Send a http header.
+void ICACHE_FLASH_ATTR httpdHeader(HttpdConnData *conn, const char *field, const char *val) {
+    httpdSend(conn, field, -1);
+    httpdSend(conn, ": ", -1);
+    httpdSend(conn, val, -1);
+    httpdSend(conn, "\r\n", -1);
+}
+
+// Shared CORS validation function
+#if CONFIG_ESPHTTPD_CORS_SUPPORT
+
+// Check if origin is in whitelist
+#if CONFIG_ESPHTTPD_CORS_ALLOW_WHITELIST
+static bool is_origin_in_whitelist(const char *origin) {
+	if (!origin) return false;
+
+    // CORS whitelist - only cross-origin requests that need access
+    const char* allowed_origins[] = {
+		// Comma separated list of origins
+		// I.e. "ionic://localhost","http://localhost","https://localhost"
+		CORS_ORIGIN_WHITELIST,
+		// Null-terminate the list
+        NULL
+    };
+
+    for (int i = 0; allowed_origins[i]; i++) {
+        if (strcmp(origin, allowed_origins[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+#endif // CONFIG_ESPHTTPD_CORS_ALLOW_WHITELIST
+
+// Check if origin matches host (same-origin)
+// This is needed for websocket requests, which always include an Origin header
+// But it doesn't hurt to check for normal HTTP requests too
+static bool is_same_origin(const char *origin, const char *host) {
+    if (!origin || !host) return false;
+
+    // Extract host from origin (remove protocol)
+    char *origin_host = strstr(origin, "://");
+    if (origin_host) {
+        origin_host += 3; // Skip "://"
+        return (strcmp(origin_host, host) == 0);
+    }
+
+    return false;
+}
+
+bool ICACHE_FLASH_ATTR httpdValidateCorsOrigin(HttpdConnData *connData) {
+#if CONFIG_ESPHTTPD_CORS_ALLOW_ALL
+	// All origins allowed
+	return true;
+#endif
+
+    char origin[64];
+    bool hasOrigin = httpdGetHeader(connData, "Origin", origin, sizeof(origin));
+    if (!hasOrigin) {
+        // Direct requests (no Origin header) are always allowed
+        return true;
+    }
+
+    char host[64];
+	bool hasHost = httpdGetHeader(connData, "Host", host, sizeof(host));
+	if (hasHost) {
+		// Enforce same-origin policy (needed for websockets)
+		if (is_same_origin(origin, host)) {
+			return true;
+		}
+	}
+
+#if CONFIG_ESPHTTPD_CORS_ALLOW_WHITELIST
+	// Check against whitelist
+	if (is_origin_in_whitelist(origin)) {
+		return true;
+	}
+#endif // CONFIG_ESPHTTPD_CORS_ALLOW_WHITELIST
+
+    ESP_LOGW(TAG, "Rejected origin: %s", origin);
+    return false;
+}
+#endif
+
+
+// Add CORS headers
+void ICACHE_FLASH_ATTR httpdCorsHeaders(HttpdConnData *connData) {
+	char origin[64];
+    bool foundOrigin = httpdGetHeader(connData, "Origin", origin, sizeof(origin));
+    if (foundOrigin) {
+        httpdHeader(connData, "Access-Control-Allow-Origin", origin);
+        httpdHeader(connData, "Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+        httpdHeader(connData, "Access-Control-Allow-Headers", "Content-Type,Authorization");
+        httpdHeader(connData, "Access-Control-Allow-Credentials", "true");
+    }
+}
+
+static void ICACHE_FLASH_ATTR startResponse(HttpdConnData *conn, int code) {
     char buff[128];
     int l;
     const char *connStr="Connection: close\r\n";
@@ -239,20 +335,26 @@ void ICACHE_FLASH_ATTR httpdStartResponse(HttpdConnData *conn, int code) {
         ESP_LOGE(TAG, "buff[%zu] too small", sizeof(buff));
     }
     httpdSend(conn, buff, l);
-
-#ifdef CONFIG_ESPHTTPD_CORS_SUPPORT
-    // CORS headers
-    httpdSend(conn, "Access-Control-Allow-Origin: *\r\n", -1);
-    httpdSend(conn, "Access-Control-Allow-Methods: GET,POST,PUT,DELETE,OPTIONS\r\n", -1);
-#endif
 }
 
-//Send a http header.
-void ICACHE_FLASH_ATTR httpdHeader(HttpdConnData *conn, const char *field, const char *val) {
-    httpdSend(conn, field, -1);
-    httpdSend(conn, ": ", -1);
-    httpdSend(conn, val, -1);
-    httpdSend(conn, "\r\n", -1);
+// CORS error response
+int ICACHE_FLASH_ATTR httpdSendCorsError(HttpdConnData *connData) {
+    startResponse(connData, 403);
+    httpdEndHeaders(connData);
+    httpdSend(connData, "403 Origin not allowed.", -1);
+    return HTTPD_CGI_DONE;
+}
+
+//Start the response headers.
+void ICACHE_FLASH_ATTR httpdStartResponse(HttpdConnData *conn, int code) {
+    startResponse(conn, code);
+
+	// Only handle CORS automatically if ALLOW_ALL or WHITELIST is set, otherwise leave it to
+	// be handled in the CGI functions.
+#if CONFIG_ESPHTTPD_CORS_SUPPORT && (CONFIG_ESPHTTPD_CORS_ALLOW_ALL || CONFIG_ESPHTTPD_CORS_ALLOW_WHITELIST)
+	// If we got this far, assume we passed the origin check in httpdHandleRequest
+    httpdCorsHeaders(conn); // Send CORS headers
+#endif
 }
 
 //Finish the headers.
@@ -566,19 +668,29 @@ static void ICACHE_FLASH_ATTR httpdProcessRequest(HttpdInstance *pInstance, Http
         return; //Shouldn't happen
     }
 
-#ifdef CONFIG_ESPHTTPD_CORS_SUPPORT
+	// Only handle CORS automatically if ALLOW_ALL or WHITELIST is set, otherwise leave it to
+	// be handled in the CGI functions.
+#if CONFIG_ESPHTTPD_CORS_SUPPORT && (CONFIG_ESPHTTPD_CORS_ALLOW_ALL || CONFIG_ESPHTTPD_CORS_ALLOW_WHITELIST)
+	if (!httpdValidateCorsOrigin(conn)) {
+		httpdSendCorsError(conn);
+		return;
+	} else {
+		ESP_LOGV(TAG, "CORS origin validated");
+	}
+
     // CORS preflight, allow the token we received before
     if (conn->requestType == HTTPD_METHOD_OPTIONS)
     {
-        httpdStartResponse(conn, 200);
+        httpdStartResponse(conn, 200); // includes some CORS headers
         httpdHeader(conn, "Access-Control-Allow-Headers", conn->priv.corsToken);
+		httpdHeader(conn, "Access-Control-Max-Age", "86400");
         httpdEndHeaders(conn);
         httpdCgiIsDone(pInstance, conn);
 
         ESP_LOGD(TAG, "CORS preflight resp sent");
         return;
     }
-#endif
+#endif // CORS_SUPPORT
 
     //See if we can find a CGI that's happy to handle the request.
     while (1)

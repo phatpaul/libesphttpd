@@ -57,6 +57,13 @@ extern "C" {
 //Max length of CORS token. This amount is allocated per connection.
 #define MAX_CORS_TOKEN_LEN 256
 
+// Allow users to define their own CORS whitelist
+#ifndef CORS_ORIGIN_WHITELIST
+#define CORS_ORIGIN_WHITELIST "ionic://localhost","http://localhost","https://localhost"
+#endif
+
+extern const char* cors_whitelist[];
+
 typedef enum
 {
 	HTTPD_CGI_MORE,

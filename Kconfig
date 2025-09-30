@@ -45,11 +45,55 @@ config ESPHTTPD_SHUTDOWN_SUPPORT
 		Add support for server shutdown. Adds ~500 bytes of code.
 
 config ESPHTTPD_CORS_SUPPORT
-    bool "CORS support"
+    bool "CORS (Cross-Origin Resource Sharing) Support"
         depends on ESPHTTPD_ENABLED
     help
         Enable support for CORS, cross origin resource sharing.
-        NOTE: Requires 256 bytes of RAM for each connection
+		NOTE: Requires 256 bytes of RAM for each connection.
+
+		If disabled, CORS support is not compiled in. Server will not handle CORS requests.
+        Saves code space but CORS requests from browsers will fail.
+
+choice ESPHTTPD_CORS_MODE
+    prompt "CORS Mode"
+    depends on ESPHTTPD_CORS_SUPPORT
+    default ESPHTTPD_CORS_ALLOW_WHITELIST
+    help
+        Select how CORS requests should be handled by the HTTP server.
+
+config ESPHTTPD_CORS_ALLOW_ALL
+    bool "Auto Allow all origins (DANGEROUS)"
+    help
+        Automatically allow all CORS requests from any origin.
+        WARNING: This is dangerous and not recommended for production use.
+        NOTE: Requires 256 bytes of RAM for each connection.
+
+config ESPHTTPD_CORS_ALLOW_WHITELIST
+    bool "Auto Allow whitelisted origins"
+    help
+        Automatically allow CORS requests from predefined whitelisted origins only.
+        Safe for production use with proper whitelist configuration.
+        NOTE: Requires 256 bytes of RAM for each connection.
+
+        To customize the whitelist, define CORS_ORIGIN_WHITELIST in your application
+        code before including httpd.h. For example:
+
+        #define CORS_ORIGIN_WHITELIST "https://myapp.com","ionic://localhost"
+        #include "httpd.h"
+
+        Default whitelist: "ionic://localhost","http://localhost","https://localhost"
+
+config ESPHTTPD_CORS_MANUAL
+    bool "Manual CORS handling by CGI"
+    help
+        CORS support functions are available, but it's up to the CGI implementation
+        to check origins and send appropriate CORS headers.
+        NOTE: Requires 256 bytes of RAM for each connection.
+
+        Use httpdGetHeader() to check "Origin" header and httpdSetCORSHeaders()
+        to send appropriate response headers in your CGI functions.
+
+endchoice
 
 config ESPHTTPD_USE_ESPFS
 	bool "Enable espfs filesystem"
@@ -107,7 +151,7 @@ config ESPHTTPD_SINGLE_REQUEST
 	depends on ESPHTTPD_ENABLED
 	default n
 	help
-		Include the "Connection: close" header.  This is useful for captive portals.	
+		Include the "Connection: close" header.  This is useful for captive portals.
 
 config ESPHTTPD_ALLOW_OTA_FACTORY_APP
 	bool "Allow OTA of Factory Partition (not recommended)"
